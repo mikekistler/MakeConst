@@ -5,6 +5,7 @@ using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Formatting;
 using Microsoft.CodeAnalysis.Rename;
+using Microsoft.CodeAnalysis.Simplification;
 using Microsoft.CodeAnalysis.Text;
 using System;
 using System.Collections.Generic;
@@ -65,10 +66,43 @@ namespace MakeConst
 
             // Insert the const token into the modifiers list, creating a new modifiers list.
             SyntaxTokenList newModifiers = trimmedLocal.Modifiers.Insert(0, constToken);
+            
+            // If the type of the declaration is 'var', create a new type name
+            // for the inferred type.
+            VariableDeclarationSyntax variableDeclaration = localDeclaration.Declaration;
+            TypeSyntax variableTypeName = variableDeclaration.Type;
+            if (variableTypeName.IsVar)
+            {
+                SemanticModel semanticModel = await document.GetSemanticModelAsync(cancellationToken).ConfigureAwait(false);
+
+                // Special case: Ensure that 'var' isn't actually an alias to another type
+                // (e.g. using var = System.String).
+                IAliasSymbol aliasInfo = semanticModel.GetAliasInfo(variableTypeName, cancellationToken);
+                if (aliasInfo == null)
+                {
+                    // Retrieve the type inferred for var.
+                    ITypeSymbol type = semanticModel.GetTypeInfo(variableTypeName, cancellationToken).ConvertedType;
+
+                    // Special case: Ensure that 'var' isn't actually a type named 'var'.
+                    if (type.Name != "var")
+                    {
+                        // Create a new TypeSyntax for the inferred type. Be careful
+                        // to keep any leading and trailing trivia from the var keyword.
+                        TypeSyntax typeName = SyntaxFactory.ParseTypeName(type.ToDisplayString())
+                            .WithLeadingTrivia(variableTypeName.GetLeadingTrivia())
+                            .WithTrailingTrivia(variableTypeName.GetTrailingTrivia());
+
+                        // Add an annotation to simplify the type name.
+                        TypeSyntax simplifiedTypeName = typeName.WithAdditionalAnnotations(Simplifier.Annotation);
+
+                        // Replace the type in the variable declaration.
+                        variableDeclaration = variableDeclaration.WithType(simplifiedTypeName);
+                    }
+                }
+            }
             // Produce the new local declaration.
-            LocalDeclarationStatementSyntax newLocal = trimmedLocal
-                .WithModifiers(newModifiers)
-                .WithDeclaration(localDeclaration.Declaration);
+            LocalDeclarationStatementSyntax newLocal = trimmedLocal.WithModifiers(newModifiers)
+                                       .WithDeclaration(variableDeclaration);
 
             // Add an annotation to format the new local declaration.
             LocalDeclarationStatementSyntax formattedLocal = newLocal.WithAdditionalAnnotations(Formatter.Annotation);
