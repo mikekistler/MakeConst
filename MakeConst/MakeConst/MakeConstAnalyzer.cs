@@ -48,6 +48,8 @@ namespace MakeConst
             TypeSyntax variableTypeName = localDeclaration.Declaration.Type;
             ITypeSymbol variableType = context.SemanticModel.GetTypeInfo(variableTypeName, context.CancellationToken).ConvertedType;
 
+            List<VariableDeclaratorSyntax> variablesToCheck = new List<VariableDeclaratorSyntax>();
+
             // Ensure that all variables in the local declaration have initializers that
             // are assigned with constant values.
             foreach (VariableDeclaratorSyntax variable in localDeclaration.Declaration.Variables)
@@ -55,13 +57,13 @@ namespace MakeConst
                 EqualsValueClauseSyntax initializer = variable.Initializer;
                 if (initializer == null)
                 {
-                    return;
+                    continue;
                 }
 
                 Optional<object> constantValue = context.SemanticModel.GetConstantValue(initializer.Value, context.CancellationToken);
                 if (!constantValue.HasValue)
                 {
-                    return;
+                    continue;
                 }
 
                 // Ensure that the initializer value can be converted to the type of the
@@ -69,7 +71,7 @@ namespace MakeConst
                 Conversion conversion = context.SemanticModel.ClassifyConversion(initializer.Value, variableType);
                 if (!conversion.Exists || conversion.IsUserDefined)
                 {
-                    return;
+                    continue;
                 }
 
                 // Special cases:
@@ -81,19 +83,20 @@ namespace MakeConst
                 {
                     if (variableType.SpecialType != SpecialType.System_String)
                     {
-                        return;
+                        continue;
                     }
                 }
                 else if (variableType.IsReferenceType && constantValue.Value != null)
                 {
-                    return;
+                    continue;
                 }
+                variablesToCheck.Add(localDeclaration.Declaration);
             }
 
             // Perform data flow analysis on the local declaration.
             DataFlowAnalysis dataFlowAnalysis = context.SemanticModel.AnalyzeDataFlow(localDeclaration);
 
-            foreach (VariableDeclaratorSyntax variable in localDeclaration.Declaration.Variables)
+            foreach (VariableDeclaratorSyntax variable in variablesToCheck)
             {
                 // Retrieve the local symbol for each variable in the local declaration
                 // and ensure that it is not written outside of the data flow analysis region.
@@ -102,11 +105,12 @@ namespace MakeConst
                 {
                     return;
                 }
+
+                // Raise the diagnostic
+                context.ReportDiagnostic(Diagnostic.Create(Rule, context.Node.GetLocation(),
+                    variable.Identifier.ValueText));
             }
 
-            // Raise the diagnostic
-            context.ReportDiagnostic(Diagnostic.Create(Rule, context.Node.GetLocation(),
-                localDeclaration.Declaration.Variables.First().Identifier.ValueText));
         }
     }
 }
