@@ -45,17 +45,35 @@ namespace MakeConst
                 return;
             }
 
-            // Use the Microsoft.CodeAnalysis.SemanticModel to perform data flow analysis on the
-            // local declaration statement.
+            // Ensure that all variables in the local declaration have initializers that
+            // are assigned with constant values.
+            foreach (VariableDeclaratorSyntax variable in localDeclaration.Declaration.Variables)
+            {
+                EqualsValueClauseSyntax initializer = variable.Initializer;
+                if (initializer == null)
+                {
+                    return;
+                }
+
+                Optional<object> constantValue = context.SemanticModel.GetConstantValue(initializer.Value, context.CancellationToken);
+                if (!constantValue.HasValue)
+                {
+                    return;
+                }
+            }
+
+            // Perform data flow analysis on the local declaration.
             DataFlowAnalysis dataFlowAnalysis = context.SemanticModel.AnalyzeDataFlow(localDeclaration);
 
-            // Retrieve the local symbol for each variable in the local declaration
-            // and ensure that it is not written outside of the data flow analysis region.
-            VariableDeclaratorSyntax variable = localDeclaration.Declaration.Variables.Single();
-            ISymbol variableSymbol = context.SemanticModel.GetDeclaredSymbol(variable, context.CancellationToken);
-            if (dataFlowAnalysis.WrittenOutside.Contains(variableSymbol))
+            foreach (VariableDeclaratorSyntax variable in localDeclaration.Declaration.Variables)
             {
-                return;
+                // Retrieve the local symbol for each variable in the local declaration
+                // and ensure that it is not written outside of the data flow analysis region.
+                ISymbol variableSymbol = context.SemanticModel.GetDeclaredSymbol(variable, context.CancellationToken);
+                if (dataFlowAnalysis.WrittenOutside.Contains(variableSymbol))
+                {
+                    return;
+                }
             }
 
             // Raise the diagnostic
